@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Boss Battle 3D Shooter</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-family: Arial, sans-serif;
+            text-shadow: 1px 1px 1px black;
+            pointer-events: none;
+        }
+        #gameOver {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 48px;
+            font-family: Arial, sans-serif;
+            text-shadow: 2px 2px 4px black;
+            display: none;
+        }
+        #restartBtn {
+            position: absolute;
+            top: 60%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 10px 20px;
+            font-size: 20px;
+            cursor: pointer;
+            display: none;
+        }
+        #bossHealth {
+            position: absolute;
+            top: 50px;
+            left: 10px;
+            color: red;
+            font-size: 24px;
+            font-family: Arial, sans-serif;
+            text-shadow: 1px 1px 1px black;
+            display: none;
+        }
+        #bossWarning {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: red;
+            font-size: 36px;
+            font-family: Arial, sans-serif;
+            text-shadow: 2px 2px 4px black;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        Score: <span id="score">0</span> | 
+        NPCs: <span id="npccount">0</span> |
+        Ammo: <span id="ammo">∞</span> |
+        Time: <span id="time">0:00</span>
+    </div>
+    <div id="bossHealth">BOSS HEALTH: <span id="bossHealthValue">100%</span></div>
+    <div id="bossWarning">BOSS INCOMING!</div>
+    <div id="gameOver">Game Over!</div>
+    <button id="restartBtn">Restart Game</button>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/controls/PointerLockControls.js"></script>
+    <script>
+        // Game variables
+        let score = 0;
+        let npcCount = 0;
+        let npcs = [];
+        let bullets = [];
+        let enemyBullets = [];
+        let lastSpawnTime = 0;
+        let spawnInterval = 3000; // 3 seconds
+        let gameActive = true;
+        let scoreInterval;
+        let lastShotTime = 0;
+        const fireRate = 200; // ms between shots
+        let gameTime = 0;
+        let bossActive = false;
+        let bossHealth = 45;
+        let lastBossShotTime = 0;
+        const bossShotInterval = 5000; // 5 seconds
+        let playerHealth = 3;
+        
+        // Scene setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB); // Sky blue
+        
+        // Camera
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.y = 1.6; // Approximate eye level
+        
+        // Renderer
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+        
+        // Controls
+        const controls = new THREE.PointerLockControls(camera, document.body);
+        
+        // Click to lock pointer (start game)
+        document.addEventListener('click', function() {
+            if (gameActive && !controls.isLocked) controls.lock();
+        }, false);
+        
+        // Movement variables
+        const moveSpeed = 0.1;
+        const keys = {
+            w: false,
+            a: false,
+            s: false,
+            d: false
+        };
+        
+        // Key listeners
+        document.addEventListener('keydown', (e) => {
+            if (e.key.toLowerCase() in keys) {
+                keys[e.key.toLowerCase()] = true;
+            }
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            if (e.key.toLowerCase() in keys) {
+                keys[e.key.toLowerCase()] = false;
+            }
+        });
+        
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0x404040);
+        scene.add(ambientLight);
+        
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(1, 1, 1);
+        directionalLight.castShadow = true;
+        scene.add(directionalLight);
+        
+        // Ground
+        const groundGeometry = new THREE.PlaneGeometry(100, 100);
+        const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x3a5f0b });
+        const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+        ground.rotation.x = -Math.PI / 2;
+        ground.receiveShadow = true;
+        scene.add(ground);
+        
+        // Create gun model
+        function createGun() {
+            const gunGroup = new THREE.Group();
+            
+            // Gun barrel
+            const barrelGeometry = new THREE.CylinderGeometry(0.05, 0.05, 0.6, 8);
+            barrelGeometry.rotateX(Math.PI / 2);
+            const barrelMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
+            const barrel = new THREE.Mesh(barrelGeometry, barrelMaterial);
+            barrel.position.set(0.4, -0.2, -0.8);
+            gunGroup.add(barrel);
+            
+            // Gun body
+            const bodyGeometry = new THREE.BoxGeometry(0.2, 0.1, 0.4);
+            const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x555555 });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            body.position.set(0.3, -0.25, -0.9);
+            gunGroup.add(body);
+            
+            // Gun grip
+            const gripGeometry = new THREE.BoxGeometry(0.15, 0.2, 0.1);
+            const gripMaterial = new THREE.MeshStandardMaterial({ color: 0x222222 });
+            const grip = new THREE.Mesh(gripGeometry, gripMaterial);
+            grip.position.set(0.3, -0.4, -0.95);
+            gunGroup.add(grip);
+            
+            // Gun trigger guard
+            const guardGeometry = new THREE.TorusGeometry(0.07, 0.02, 8, 8);
+            guardGeometry.rotateY(Math.PI / 2);
+            const guardMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
+            const guard = new THREE.Mesh(guardGeometry, guardMaterial);
+            guard.position.set(0.4, -0.3, -0.95);
+            gunGroup.add(guard);
+            
+            // Position the gun in first-person view
+            gunGroup.position.set(0.5, -0.3, -1);
+            
+            return gunGroup;
+        }
+        
+        const gun = createGun();
+        camera.add(gun);
+        
+        // Player collision box (invisible)
+        const playerBox = new THREE.Box3();
+        const playerSize = new THREE.Vector3(0.5, 1.8, 0.5);
+        
+        // NPC geometry (cubes)
+        const npcGeometry = new THREE.BoxGeometry(0.8, 1.8, 0.8);
+        const npcMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+        
+        // Boss geometry (big cube)
+        const bossGeometry = new THREE.BoxGeometry(3, 5, 3);
+        const bossMaterial = new THREE.MeshStandardMaterial({ color: 0x990000 });
+        let boss = null;
+        
+        // Create an NPC at a random position
+        function createNPC() {
+            const npc = new THREE.Mesh(npcGeometry, npcMaterial.clone());
+            npc.material.color.setHex(Math.random() * 0xffffff);
+            
+            // Random position within bounds
+            npc.position.x = (Math.random() - 0.5) * 80;
+            npc.position.z = (Math.random() - 0.5) * 80;
+            npc.position.y = 0.9; // Half of height
+            
+            npc.castShadow = true;
+            npc.receiveShadow = true;
+            
+            // Add some movement behavior
+            npc.speed = Math.random() * 0.02 + 0.01;
+            npc.direction = new THREE.Vector3(
+                Math.random() - 0.5,
+                0,
+                Math.random() - 0.5
+            ).normalize();
+            
+            // Add collision box
+            npc.box = new THREE.Box3();
+            npc.box.setFromObject(npc);
+            
+            scene.add(npc);
+            npcs.push(npc);
+            npcCount++;
+            document.getElementById('npccount').textContent = npcCount;
+        }
+        
+        // Create the boss
+        function createBoss() {
+            boss = new THREE.Mesh(bossGeometry, bossMaterial);
+            boss.position.set(0, 2.5, -20); // Positioned in front of player
+            boss.castShadow = true;
+            boss.receiveShadow = true;
+            
+            // Add collision box
+            boss.box = new THREE.Box3();
+            boss.box.setFromObject(boss);
+            
+            scene.add(boss);
+            bossActive = true;
+            bossHealth = 45;
+            updateBossHealthDisplay();
+            document.getElementById('bossHealth').style.display = 'block';
+            
+            // Show boss warning
+            document.getElementById('bossWarning').style.display = 'block';
+            setTimeout(() => {
+                document.getElementById('bossWarning').style.display = 'none';
+            }, 2000);
+        }
+        
+        // Create a bullet
+        function createBullet() {
+            const bulletGeometry = new THREE.SphereGeometry(0.05, 8, 8);
+            const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xFFFF00 });
+            const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
+            
+            // Position bullet at gun barrel end
+            const barrelEnd = new THREE.Vector3(0.7, -0.2, -1.1);
+            bullet.position.copy(barrelEnd);
+            bullet.position.applyMatrix4(camera.matrixWorld);
+            
+            // Set bullet direction (camera forward vector)
+            const direction = new THREE.Vector3(0, 0, -1);
+            direction.applyQuaternion(camera.quaternion);
+            direction.normalize();
+            
+            // Add bullet trail
+            const trailGeometry = new THREE.BufferGeometry();
+            const trailMaterial = new THREE.LineBasicMaterial({ color: 0xFFA500 });
+            const trail = new THREE.Line(trailGeometry, trailMaterial);
+            scene.add(trail);
+            
+            return { mesh: bullet, direction: direction, trail: trail, distance: 0 };
+        }
+        
+        // Create enemy bullet (from boss)
+        function createEnemyBullet() {
+            if (!boss) return;
+            
+            const bulletGeometry = new THREE.SphereGeometry(0.2, 8, 8);
+            const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xFF0000 });
+            const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
+            
+            // Position bullet at boss position
+            bullet.position.copy(boss.position);
+            bullet.position.y -= 1; // Shoot from lower part of boss
+            
+            // Set bullet direction toward player
+            const direction = new THREE.Vector3();
+            direction.subVectors(camera.position, boss.position).normalize();
+            
+            // Add bullet trail
+            const trailGeometry = new THREE.BufferGeometry();
+            const trailMaterial = new THREE.LineBasicMaterial({ color: 0xFF6666 });
+            const trail = new THREE.Line(trailGeometry, trailMaterial);
+            scene.add(trail);
+            
+            return { mesh: bullet, direction: direction, trail: trail, distance: 0 };
+        }
+        
+        // Update boss health display
+        function updateBossHealthDisplay() {
+            const healthPercent = Math.floor((bossHealth / 45) * 100);
+            document.getElementById('bossHealthValue').textContent = `${healthPercent}%`;
+        }
+        
+        // Shooting mechanic
+        document.addEventListener('click', (e) => {
+            if (!controls.isLocked || !gameActive) return;
+            
+            const currentTime = Date.now();
+            if (currentTime - lastShotTime < fireRate) return;
+            lastShotTime = currentTime;
+            
+            // Create bullet
+            const bullet = createBullet();
+            scene.add(bullet.mesh);
+            bullets.push(bullet);
+            
+            // Gun recoil animation
+            gun.position.z = -1.1;
+            setTimeout(() => {
+                gun.position.z = -1;
+            }, 100);
+        });
+        
+        // Game over function
+        function endGame() {
+            gameActive = false;
+            controls.unlock();
+            document.getElementById('gameOver').style.display = 'block';
+            document.getElementById('restartBtn').style.display = 'block';
+            document.getElementById('bossHealth').style.display = 'none';
+            clearInterval(scoreInterval);
+            clearInterval(timeInterval);
+        }
+        
+        // Restart game function
+        function restartGame() {
+            // Clear existing NPCs
+            npcs.forEach(npc => scene.remove(npc));
+            npcs = [];
+            npcCount = 0;
+            
+            // Clear bullets
+            bullets.forEach(bullet => {
+                scene.remove(bullet.mesh);
+                scene.remove(bullet.trail);
+            });
+            bullets = [];
+            
+            // Clear enemy bullets
+            enemyBullets.forEach(bullet => {
+                scene.remove(bullet.mesh);
+                scene.remove(bullet.trail);
+            });
+            enemyBullets = [];
+            
+            // Remove boss if exists
+            if (boss) {
+                scene.remove(boss);
+                boss = null;
+            }
+            
+            // Reset game state
+            score = 0;
+            gameTime = 0;
+            bossActive = false;
+            playerHealth = 3;
+            document.getElementById('score').textContent = score;
+            document.getElementById('npccount').textContent = npcCount;
+            document.getElementById('time').textContent = '0:00';
+            document.getElementById('gameOver').style.display = 'none';
+            document.getElementById('restartBtn').style.display = 'none';
+            document.getElementById('bossHealth').style.display = 'none';
+            document.getElementById('bossWarning').style.display = 'none';
+            
+            // Reset camera position
+            camera.position.set(0, 1.6, 0);
+            controls.getObject().rotation.set(0, 0, 0);
+            
+            // Reset spawn interval
+            spawnInterval = 3000;
+            lastSpawnTime = Date.now();
+            
+            // Start score timer
+            scoreInterval = setInterval(() => {
+                if (gameActive) {
+                    score += 10;
+                    document.getElementById('score').textContent = score;
+                }
+            }, 1000);
+            
+            // Start game time timer
+            timeInterval = setInterval(updateGameTime, 1000);
+            
+            gameActive = true;
+        }
+        
+        // Update game time display
+        function updateGameTime() {
+            if (!gameActive) return;
+            
+            gameTime++;
+            const minutes = Math.floor(gameTime / 60);
+            const seconds = gameTime % 60;
+            document.getElementById('time').textContent = `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
+            
+            // Spawn boss every 60 seconds
+            if (gameTime % 60 === 0 && !bossActive) {
+                createBoss();
+            }
+        }
+        
+        // Restart button
+        document.getElementById('restartBtn').addEventListener('click', restartGame);
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // Start the score timer
+        scoreInterval = setInterval(() => {
+            if (gameActive) {
+                score += 10;
+                document.getElementById('score').textContent = score;
+            }
+        }, 1000);
+        
+        // Start game time timer
+        const timeInterval = setInterval(updateGameTime, 1000);
+        
+        // Game loop
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            if (gameActive) {
+                // Movement
+                if (controls.isLocked) {
+                    if (keys.w) controls.moveForward(moveSpeed);
+                    if (keys.s) controls.moveForward(-moveSpeed);
+                    if (keys.a) controls.moveRight(-moveSpeed);
+                    if (keys.d) controls.moveRight(moveSpeed);
+                }
+                
+                // Update player collision box
+                playerBox.setFromCenterAndSize(
+                    new THREE.Vector3(camera.position.x, camera.position.y, camera.position.z),
+                    playerSize
+                );
+                
+                // NPC spawning
+                const currentTime = Date.now();
+                if (currentTime - lastSpawnTime > spawnInterval && !bossActive) {
+                    createNPC();
+                    lastSpawnTime = currentTime;
+                    
+                    // Gradually decrease spawn interval to make game harder
+                    spawnInterval = Math.max(500, spawnInterval * 0.95);
+                }
+                
+                // NPC movement and collision
+                npcs.forEach(npc => {
+                    // Simple wandering behavior
+                    npc.position.x += npc.direction.x * npc.speed;
+                    npc.position.z += npc.direction.z * npc.speed;
+                    
+                    // Change direction randomly
+                    if (Math.random() < 0.01) {
+                        npc.direction = new THREE.Vector3(
+                            Math.random() - 0.5,
+                            0,
+                            Math.random() - 0.5
+                        ).normalize();
+                    }
+                    
+                    // Keep within bounds
+                    if (Math.abs(npc.position.x) > 40) npc.direction.x *= -1;
+                    if (Math.abs(npc.position.z) > 40) npc.direction.z *= -1;
+                    
+                    // Update NPC collision box
+                    npc.box.setFromObject(npc);
+                    
+                    // Check collision with player
+                    if (playerBox.intersectsBox(npc.box)) {
+                        playerHealth--;
+                        if (playerHealth <= 0) {
+                            endGame();
+                        }
+                    }
+                });
+                
+                // Boss behavior
+                if (bossActive && boss) {
+                    // Update boss collision box
+                    boss.box.setFromObject(boss);
+                    
+                    // Boss shooting (every 5 seconds)
+                    const currentTime = Date.now();
+                    if (currentTime - lastBossShotTime > bossShotInterval) {
+                        const bullet = createEnemyBullet();
+                        scene.add(bullet.mesh);
+                        enemyBullets.push(bullet);
+                        lastBossShotTime = currentTime;
+                    }
+                    
+                    // Make boss always face player
+                    boss.lookAt(camera.position);
+                }
+                
+                // Bullet movement and collision
+                for (let i = bullets.length - 1; i >= 0; i--) {
+                    const bullet = bullets[i];
+                    
+                    // Move bullet
+                    bullet.mesh.position.addScaledVector(bullet.direction, 0.5);
+                    bullet.distance += 0.5;
+                    
+                    // Update bullet trail
+                    const positions = new Float32Array([
+                        bullet.mesh.position.x, bullet.mesh.position.y, bullet.mesh.position.z,
+                        bullet.mesh.position.x - bullet.direction.x * 0.3,
+                        bullet.mesh.position.y - bullet.direction.y * 0.3,
+                        bullet.mesh.position.z - bullet.direction.z * 0.3
+                    ]);
+                    bullet.trail.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                    
+                    // Check for NPC hits
+                    let hit = false;
+                    for (let j = npcs.length - 1; j >= 0; j--) {
+                        const npc = npcs[j];
+                        npc.box.setFromObject(npc);
+                        
+                        if (bullet.mesh.position.distanceTo(npc.position) < 0.5) {
+                            // Hit detected
+                            scene.remove(npc);
+                            npcs.splice(j, 1);
+                            npcCount--;
+                            document.getElementById('npccount').textContent = npcCount;
+                            score += 50;
+                            document.getElementById('score').textContent = score;
+                            hit = true;
+                            break;
+                        }
+                    }
+                    
+                    // Check for boss hits
+                    if (bossActive && boss && !hit) {
+                        if (bullet.mesh.position.distanceTo(boss.position) < 3) {
+                            // Hit boss
+                            bossHealth--;
+                            updateBossHealthDisplay();
+                            hit = true;
+                            
+                            // Visual feedback for boss hit
+                            boss.material.color.setHex(0xFF0000);
+                            setTimeout(() => {
+                                if (boss) boss.material.color.setHex(0x990000);
+                            }, 100);
+                            
+                            // Check if boss is defeated
+                            if (bossHealth <= 0) {
+                                scene.remove(boss);
+                                boss = null;
+                                bossActive = false;
+                                score += 1000; // Big bonus for defeating boss
+                                document.getElementById('score').textContent = score;
+                                document.getElementById('bossHealth').style.display = 'none';
+                            }
+                        }
+                    }
+                    
+                    // Remove bullet if it hits something or goes too far
+                    if (hit || bullet.distance > 50) {
+                        scene.remove(bullet.mesh);
+                        scene.remove(bullet.trail);
+                        bullets.splice(i, 1);
+                    }
+                }
+                
+                // Enemy bullet movement and collision
+                for (let i = enemyBullets.length - 1; i >= 0; i--) {
+                    const bullet = enemyBullets[i];
+                    
+                    // Move bullet slowly
+                    bullet.mesh.position.addScaledVector(bullet.direction, 0.1);
+                    bullet.distance += 0.1;
+                    
+                    // Update bullet trail
+                    const positions = new Float32Array([
+                        bullet.mesh.position.x, bullet.mesh.position.y, bullet.mesh.position.z,
+                        bullet.mesh.position.x - bullet.direction.x * 0.6,
+                        bullet.mesh.position.y - bullet.direction.y * 0.6,
+                        bullet.mesh.position.z - bullet.direction.z * 0.6
+                    ]);
+                    bullet.trail.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                    
+                    // Check for player hits - INSTANT DEATH
+                    if (playerBox.containsPoint(bullet.mesh.position)) {
+                        endGame(); // Game over immediately when hit by boss bullet
+                        scene.remove(bullet.mesh);
+                        scene.remove(bullet.trail);
+                        enemyBullets.splice(i, 1);
+                        continue;
+                    }
+                    
+                    // Remove bullet if it goes too far
+                    if (bullet.distance > 50) {
+                        scene.remove(bullet.mesh);
+                        scene.remove(bullet.trail);
+                        enemyBullets.splice(i, 1);
+                    }
+                }
+            }
+            
+            renderer.render(scene, camera);
+        }
+        
+        animate();
+    </script>
+</body>
+</html>
